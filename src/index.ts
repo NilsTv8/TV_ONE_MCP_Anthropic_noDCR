@@ -6,7 +6,7 @@ import { AsyncLocalStorage } from "async_hooks";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
-import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -169,50 +169,30 @@ if (tvClientId && !tvClientSecret || !tvClientId && tvClientSecret) {
 const tvCallbackUrl = process.env.TEAMVIEWER_CALLBACK_URL;
 let provider: TeamViewerOAuthProvider | undefined;
 
-const OAUTH_SCOPES = [
-  "UserInfo.View",
-  "Computers.View",
-  "Computers.Edit",
-  "Computers.Delete",
-  "Groups.View",
-  "Groups.Create",
-  "Groups.Edit",
-  "Groups.Delete",
-  "Contacts.View",
-  "Contacts.Create",
-  "Contacts.Edit",
-  "Contacts.Delete",
-  "Partners.View",
-  "Sessions.ManualCreation",
-];
-
 if (tvClientId && tvClientSecret) {
   provider = new TeamViewerOAuthProvider(tvClientId, tvClientSecret, serverUrl, tvCallbackUrl);
-
-  // Suppress the standard well-known protected resource endpoints so clients do
-  // not discover OAuth requirements proactively when adding the server. OAuth is
-  // instead triggered lazily the first time tools/call is invoked, via the 401
-  // WWW-Authenticate header pointing to a non-standard metadata URL below.
-  app.get("/.well-known/oauth-protected-resource", (_req, res) => res.status(404).end());
-  app.get("/.well-known/oauth-protected-resource/mcp", (_req, res) => res.status(404).end());
-
-  // Non-standard resource metadata — not guessable from well-known paths.
-  // Clients reach it only by following the resource_metadata URL in a 401.
-  app.get("/.well-known/mcp-resource", (_req, res) => {
-    res.json({
-      resource: mcpResourceUrl.href,
-      authorization_servers: [serverUrl.href.endsWith("/") ? serverUrl.href : serverUrl.href + "/"],
-      scopes_supported: OAUTH_SCOPES,
-      resource_name: "TeamViewer MCP Server",
-    });
-  });
 
   app.use(
     mcpAuthRouter({
       provider,
       issuerUrl: serverUrl,
       resourceServerUrl: mcpResourceUrl,
-      scopesSupported: OAUTH_SCOPES,
+      scopesSupported: [
+        "UserInfo.View",
+        "Computers.View",
+        "Computers.Edit",
+        "Computers.Delete",
+        "Groups.View",
+        "Groups.Create",
+        "Groups.Edit",
+        "Groups.Delete",
+        "Contacts.View",
+        "Contacts.Create",
+        "Contacts.Edit",
+        "Contacts.Delete",
+        "Partners.View",
+        "Sessions.ManualCreation",
+      ],
       resourceName: "TeamViewer MCP Server",
     })
   );
@@ -332,7 +312,7 @@ const normalizeAccept: express.RequestHandler = (req, _res, next) => {
 
 const mcpMiddleware: express.RequestHandler[] = [mcpCors, normalizeAccept];
 if (provider) {
-  const resourceMetadataUrl = new URL("/.well-known/mcp-resource", serverUrl).href;
+  const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(mcpResourceUrl);
 
   // RFC 6750 §3.1 compliant bearer auth:
   // Only tools/call requires authentication — all other methods (initialize,

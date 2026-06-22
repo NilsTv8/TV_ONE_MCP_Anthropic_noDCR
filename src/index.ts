@@ -315,14 +315,12 @@ if (provider) {
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(mcpResourceUrl);
 
   // RFC 6750 §3.1 compliant bearer auth:
-  // - No Authorization header → 401 with NO error field (signals "please authenticate")
-  // - Invalid/expired token   → 401 with error="invalid_token"
-  // initialize and notifications/initialized are exempt so the MCP handshake completes
-  // before OAuth, letting Claude discover the server is reachable.
+  // Only tools/call requires authentication — all other methods (initialize,
+  // tools/list, ping, etc.) are allowed through so OAuth is only triggered
+  // when a tool is actually invoked, not at connection time.
   const customBearerAuth: express.RequestHandler = async (req, res, next) => {
     const method = (req.body as Record<string, unknown>)?.method;
-    const unauthenticatedMethods = new Set(["initialize", "notifications/initialized", "tools/list"]);
-    if (req.method === "POST" && unauthenticatedMethods.has(method as string)) {
+    if (req.method !== "POST" || method !== "tools/call") {
       return next();
     }
 

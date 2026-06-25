@@ -172,6 +172,17 @@ let provider: TeamViewerOAuthProvider | undefined;
 if (tvClientId && tvClientSecret) {
   provider = new TeamViewerOAuthProvider(tvClientId, tvClientSecret, serverUrl, tvCallbackUrl);
 
+  // Record each client's redirect_uri before the SDK validates it — without DCR
+  // there are no pre-registered clients, so we capture the URI here and return
+  // it from getClient() so the SDK's redirect_uri check passes.
+  app.use("/authorize", (req: express.Request, _res: express.Response, next: express.NextFunction) => {
+    const p = req.method === "POST" ? req.body : req.query;
+    const clientId = p.client_id as string | undefined;
+    const redirectUri = p.redirect_uri as string | undefined;
+    if (clientId && redirectUri) provider!.recordRedirectUri(clientId, redirectUri);
+    next();
+  });
+
   app.use(
     mcpAuthRouter({
       provider,

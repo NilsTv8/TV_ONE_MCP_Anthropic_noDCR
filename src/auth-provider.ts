@@ -70,7 +70,7 @@ export class TeamViewerOAuthProvider implements OAuthServerProvider {
   private readonly pendingCodes = new BoundedMap<string, PendingCode>(1000);
   private readonly tokenCache = new BoundedMap<string, TokenCacheEntry>(10000);
   private readonly tokenExpiry = new BoundedMap<string, number>(10000);
-  private readonly registeredClients = new BoundedMap<string, OAuthClientInformationFull>(10000);
+  private readonly knownRedirectUris = new BoundedMap<string, string>(1000);
 
   constructor(
     private readonly tvClientId: string,
@@ -79,19 +79,21 @@ export class TeamViewerOAuthProvider implements OAuthServerProvider {
     private readonly callbackUrl?: string
   ) {}
 
+  recordRedirectUri(clientId: string, redirectUri: string): void {
+    this.knownRedirectUris.set(clientId, redirectUri);
+  }
+
   get clientsStore(): OAuthRegisteredClientsStore {
     return {
       getClient: async (id): Promise<OAuthClientInformationFull | undefined> => {
-        return this.registeredClients.get(id);
-      },
-      registerClient: async (client): Promise<OAuthClientInformationFull> => {
-        const registered: OAuthClientInformationFull = {
-          ...client,
-          client_id: randomBytes(16).toString("hex"),
-          client_id_issued_at: Math.floor(Date.now() / 1000),
+        const redirectUri = this.knownRedirectUris.get(id);
+        return {
+          client_id: id,
+          redirect_uris: redirectUri ? [redirectUri] : [],
+          token_endpoint_auth_method: "none",
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
         };
-        this.registeredClients.set(registered.client_id, registered);
-        return registered;
       },
     };
   }

@@ -372,6 +372,14 @@ if (provider) {
 app.all("/mcp", ...mcpMiddleware, handleMcpRequest as express.RequestHandler);
 app.all("/", ...mcpMiddleware, handleMcpRequest as express.RequestHandler);
 
+// Catch body-parser JSON errors and any other unhandled errors — never expose stack traces.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const status = (err as NodeJS.ErrnoException & { status?: number }).status ?? 500;
+  const isBadJson = err instanceof SyntaxError && "body" in err;
+  res.status(isBadJson ? 400 : status).json({ error: isBadJson ? "Invalid JSON" : "Internal server error" });
+});
+
 // TLS is terminated by Azure App Service — the server always listens on plain HTTP.
 function startServer(): void {
   const base = serverUrl.href.replace(/\/$/, "");

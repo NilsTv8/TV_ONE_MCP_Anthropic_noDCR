@@ -3,44 +3,35 @@ import { TeamViewerClient } from "../client.js";
 
 export const companyTools: Tool[] = [
   {
-    name: "tv_get_company",
-    description: "Returns details about the company associated with the API token.",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
-    name: "tv_update_company",
-    description: "Modifies company information.",
+    name: "tv_company",
+    description: `Manage the company associated with the API token.
+
+action values:
+  get          — get company details (no params)
+  update       — update company info (optional: name, email)
+  get_license  — get company licensing data (no params)`,
     inputSchema: {
       type: "object",
+      required: ["action"],
       properties: {
+        action: { type: "string", enum: ["get", "update", "get_license"] },
         name: { type: "string", description: "Company name" },
         email: { type: "string", description: "Company email" },
       },
     },
   },
-  {
-    name: "tv_get_company_license",
-    description: "Retrieves company licensing data.",
-    inputSchema: { type: "object", properties: {} },
-  },
 ];
 
 export async function handleCompanyTool(
-  name: string,
+  _name: string,
   args: Record<string, unknown>,
   client: TeamViewerClient
 ): Promise<unknown> {
-  switch (name) {
-    case "tv_get_company":
-      return client.get("/company");
-
-    case "tv_update_company":
-      return client.put("/company", args);
-
-    case "tv_get_company_license":
-      return client.get("/company/license");
-
-    default:
-      throw new Error(`Unknown company tool: ${name}`);
+  const { action, ...rest } = args as { action: string } & Record<string, unknown>;
+  switch (action) {
+    case "get":         return client.get("/company");
+    case "update":      return client.put("/company", rest);
+    case "get_license": return client.get("/company/license");
+    default: throw new Error(`Unknown action for tv_company: ${action}`);
   }
 }

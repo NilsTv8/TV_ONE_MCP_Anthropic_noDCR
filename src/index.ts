@@ -18,7 +18,6 @@ import { TeamViewerOAuthProvider } from "./auth-provider.js";
 import { accountTools, handleAccountTool } from "./tools/account.js";
 import { companyTools, handleCompanyTool } from "./tools/company.js";
 import { deviceGroupTools, handleDeviceGroupTool } from "./tools/device-groups.js";
-import { deviceTools, handleDeviceTool } from "./tools/devices.js";
 import { contactTools, handleContactTool } from "./tools/contacts.js";
 import { eventLoggingTools, handleEventLoggingTool } from "./tools/event-logging.js";
 import { managedDeviceTools, handleManagedDeviceTool } from "./tools/managed-devices.js";
@@ -57,7 +56,6 @@ const ALL_TOOLS = [
   ...accountTools,
   ...companyTools,
   ...deviceGroupTools,
-  ...deviceTools,
   ...contactTools,
   ...eventLoggingTools,
   ...managedDeviceTools,
@@ -79,7 +77,6 @@ const TOOL_HANDLERS: Record<
   ...Object.fromEntries(accountTools.map((t) => [t.name, handleAccountTool])),
   ...Object.fromEntries(companyTools.map((t) => [t.name, handleCompanyTool])),
   ...Object.fromEntries(deviceGroupTools.map((t) => [t.name, handleDeviceGroupTool])),
-  ...Object.fromEntries(deviceTools.map((t) => [t.name, handleDeviceTool])),
   ...Object.fromEntries(contactTools.map((t) => [t.name, handleContactTool])),
   ...Object.fromEntries(eventLoggingTools.map((t) => [t.name, handleEventLoggingTool])),
   ...Object.fromEntries(managedDeviceTools.map((t) => [t.name, handleManagedDeviceTool])),

@@ -3,86 +3,36 @@ import { TeamViewerClient } from "../client.js";
 
 export const userTools: Tool[] = [
   {
-    name: "tv_list_users",
-    description: "Returns company users with optional filtering by email, name, or permissions.",
+    name: "tv_users",
+    description: `Manage TeamViewer company users.
+
+action values:
+  list    — list users (optional: email, name, permissions, full_list)
+  get     — get a user (required: user_id)
+  create  — create a user (required: email, name, language; optional: password, userRoleId, license_key, log_sessions, show_comment_window, tfa_enforcement)
+  update  — update a user (required: user_id; optional: email, name, password, active, AssignUserRoleIds[], UnassignUserRoleIds[], log_sessions, show_comment_window, tfa_enforcement, license_key)
+  delete  — delete a user (required: user_id; optional: is_permanent_delete)`,
     inputSchema: {
       type: "object",
+      required: ["action"],
       properties: {
-        email: { type: "string", description: "Filter by email address" },
-        name: { type: "string", description: "Filter by display name" },
-        permissions: { type: "string", description: "Filter by permission" },
-        full_list: { type: "boolean", description: "Include deactivated users" },
-      },
-    },
-  },
-  {
-    name: "tv_create_user",
-    description: "Creates a new user in the company.",
-    inputSchema: {
-      type: "object",
-      required: ["email", "name", "language"],
-      properties: {
-        email: { type: "string", description: "User email address" },
-        name: { type: "string", description: "Display name" },
-        language: { type: "string", description: "Language code (e.g. 'en')" },
-        password: { type: "string", description: "Password (if not using SSO)" },
-        userRoleId: { type: "string", description: "User role ID to assign" },
-        license_key: { type: "string", description: "License key" },
-        log_sessions: { type: "boolean", description: "Enable session logging" },
-        show_comment_window: { type: "boolean", description: "Show comment window after sessions" },
-        tfa_enforcement: { type: "boolean", description: "Enforce two-factor authentication" },
-      },
-    },
-  },
-  {
-    name: "tv_get_user",
-    description: "Returns a specific user by ID.",
-    inputSchema: {
-      type: "object",
-      required: ["user_id"],
-      properties: {
+        action: { type: "string", enum: ["list", "get", "create", "update", "delete"] },
         user_id: { type: "string", description: "User ID (e.g. 'u123456')" },
-      },
-    },
-  },
-  {
-    name: "tv_update_user",
-    description: "Updates a user's properties.",
-    inputSchema: {
-      type: "object",
-      required: ["user_id"],
-      properties: {
-        user_id: { type: "string", description: "User ID" },
-        email: { type: "string", description: "New email address" },
-        name: { type: "string", description: "New display name" },
-        password: { type: "string", description: "New password" },
-        active: { type: "boolean", description: "Activate or deactivate the user" },
-        AssignUserRoleIds: {
-          type: "array",
-          items: { type: "string" },
-          description: "User role IDs to assign",
-        },
-        UnassignUserRoleIds: {
-          type: "array",
-          items: { type: "string" },
-          description: "User role IDs to unassign",
-        },
-        log_sessions: { type: "boolean", description: "Enable session logging" },
-        show_comment_window: { type: "boolean", description: "Show comment window after sessions" },
-        tfa_enforcement: { type: "boolean", description: "Enforce two-factor authentication" },
-        license_key: { type: "string", description: "License key" },
-      },
-    },
-  },
-  {
-    name: "tv_delete_user",
-    description: "Deletes a user.",
-    inputSchema: {
-      type: "object",
-      required: ["user_id"],
-      properties: {
-        user_id: { type: "string", description: "User ID to delete" },
-        is_permanent_delete: { type: "boolean", description: "Permanently delete (true) or deactivate (false)" },
+        email: { type: "string" },
+        name: { type: "string" },
+        language: { type: "string", description: "Language code (e.g. 'en')" },
+        password: { type: "string" },
+        active: { type: "boolean", description: "Activate or deactivate user (update)" },
+        permissions: { type: "string", description: "Filter by permission (list)" },
+        full_list: { type: "boolean", description: "Include deactivated users (list)" },
+        is_permanent_delete: { type: "boolean", description: "Permanently delete vs deactivate (delete)" },
+        userRoleId: { type: "string", description: "Role ID to assign (create)" },
+        AssignUserRoleIds: { type: "array", items: { type: "string" }, description: "Role IDs to assign (update)" },
+        UnassignUserRoleIds: { type: "array", items: { type: "string" }, description: "Role IDs to unassign (update)" },
+        license_key: { type: "string" },
+        log_sessions: { type: "boolean" },
+        show_comment_window: { type: "boolean" },
+        tfa_enforcement: { type: "boolean" },
       },
     },
   },
@@ -110,7 +60,7 @@ export const userTools: Tool[] = [
       required: ["user_id"],
       properties: {
         user_id: { type: "string", description: "User ID" },
-        pagination_token: { type: "string", description: "Pagination continuation token" },
+        pagination_token: { type: "string" },
       },
     },
   },
@@ -121,7 +71,7 @@ export const userTools: Tool[] = [
       type: "object",
       required: ["user_id", "approve"],
       properties: {
-        user_id: { type: "string", description: "User ID requesting to join" },
+        user_id: { type: "string" },
         approve: { type: "boolean", description: "true to approve, false to reject" },
       },
     },
@@ -133,51 +83,25 @@ export async function handleUserTool(
   args: Record<string, unknown>,
   client: TeamViewerClient
 ): Promise<unknown> {
-  switch (name) {
-    case "tv_list_users":
-      return client.get("/users", {
-        email: args.email as string | undefined,
-        name: args.name as string | undefined,
-        permissions: args.permissions as string | undefined,
-        full_list: args.full_list as boolean | undefined,
-      });
+  if (name === "tv_deactivate_user_tfa")
+    return client.delete(`/users/${args.user_id}/tfa`);
+  if (name === "tv_get_user_effective_permissions")
+    return client.get("/users/effectivepermissions");
+  if (name === "tv_get_user_roles")
+    return client.get(`/users/${args.user_id}/userroles`, { paginationToken: args.pagination_token as string | undefined });
+  if (name === "tv_respond_to_join_company_request")
+    return client.post("/users/respondtojointocompanyrequest", { userId: args.user_id, approve: args.approve });
 
-    case "tv_create_user": {
-      const { user_id: _id, ...body } = args as { user_id?: string } & Record<string, unknown>;
-      return client.post("/users", body);
-    }
-
-    case "tv_get_user":
-      return client.get(`/users/${args.user_id}`);
-
-    case "tv_update_user": {
-      const { user_id, ...body } = args as { user_id: string } & Record<string, unknown>;
-      return client.put(`/users/${user_id}`, body);
-    }
-
-    case "tv_delete_user":
-      return client.delete(`/users/${args.user_id}`, undefined, {
-        isPermanentDelete: args.is_permanent_delete as boolean | undefined,
-      });
-
-    case "tv_deactivate_user_tfa":
-      return client.delete(`/users/${args.user_id}/tfa`);
-
-    case "tv_get_user_effective_permissions":
-      return client.get("/users/effectivepermissions");
-
-    case "tv_get_user_roles":
-      return client.get(`/users/${args.user_id}/userroles`, {
-        paginationToken: args.pagination_token as string | undefined,
-      });
-
-    case "tv_respond_to_join_company_request":
-      return client.post("/users/respondtojointocompanyrequest", {
-        userId: args.user_id,
-        approve: args.approve,
-      });
-
-    default:
-      throw new Error(`Unknown user tool: ${name}`);
+  const { action, user_id, email, name: userName, permissions, full_list, is_permanent_delete, ...rest } = args as {
+    action: string; user_id?: string; email?: string; name?: string;
+    permissions?: string; full_list?: boolean; is_permanent_delete?: boolean;
+  } & Record<string, unknown>;
+  switch (action) {
+    case "list":   return client.get("/users", { email, name: userName, permissions, full_list });
+    case "get":    return client.get(`/users/${user_id}`);
+    case "create": return client.post("/users", { email, name: userName, ...rest });
+    case "update": return client.put(`/users/${user_id}`, rest);
+    case "delete": return client.delete(`/users/${user_id}`, undefined, { isPermanentDelete: is_permanent_delete });
+    default: throw new Error(`Unknown action for tv_users: ${action}`);
   }
 }

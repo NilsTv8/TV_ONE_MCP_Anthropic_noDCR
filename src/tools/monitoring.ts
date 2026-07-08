@@ -3,109 +3,61 @@ import { TeamViewerClient } from "../client.js";
 
 export const monitoringTools: Tool[] = [
   {
-    name: "tv_list_monitoring_alarms",
-    description: "Gets the list of monitoring alarms for the account, with optional filtering.",
+    name: "tv_monitoring",
+    description: `Manage TeamViewer monitoring and device information.
+
+action values:
+  list_alarms      — list monitoring alarms (optional: status, device_id, group_id, start_date, end_date, continuation_token)
+  list_devices     — list devices with monitoring enabled (no params)
+  activate         — activate monitoring on a device (required: teamviewer_id; optional: monitoring_policy_id, patch_management_policy_id)
+  get_hardware     — get hardware info for a monitored device (required: device_id)
+  get_system_info  — get OS/hostname info for a monitored device (required: device_id)
+  get_software     — get installed software for a monitored device (required: device_id)`,
     inputSchema: {
       type: "object",
+      required: ["action"],
       properties: {
-        status: { type: "string", description: "Filter by alarm status (e.g. 'open', 'closed')" },
-        device_id: { type: "string", description: "Filter alarms by device ID" },
-        group_id: { type: "string", description: "Filter alarms by group ID" },
-        start_date: { type: "string", description: "Filter alarms from this date (ISO 8601)" },
-        end_date: { type: "string", description: "Filter alarms until this date (ISO 8601)" },
-        continuation_token: { type: "string", description: "Pagination continuation token" },
-      },
-    },
-  },
-  {
-    name: "tv_list_monitoring_devices",
-    description: "Returns devices that have monitoring enabled.",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
-    name: "tv_activate_monitoring",
-    description: "Activates patch management and monitoring services on a device.",
-    inputSchema: {
-      type: "object",
-      required: ["teamviewer_id"],
-      properties: {
-        teamviewer_id: { type: "number", description: "TeamViewer numeric device ID" },
-        monitoring_policy_id: { type: "string", description: "Monitoring policy ID to apply" },
-        patch_management_policy_id: { type: "string", description: "Patch management policy ID to apply" },
-      },
-    },
-  },
-  {
-    name: "tv_get_device_hardware_info",
-    description: "Gets hardware information for a monitored device (CPU, RAM, disk, etc.).",
-    inputSchema: {
-      type: "object",
-      required: ["device_id"],
-      properties: {
-        device_id: { type: "string", description: "Device ID (UUID)" },
-      },
-    },
-  },
-  {
-    name: "tv_get_device_system_info",
-    description: "Gets system information for a monitored device (OS, hostname, etc.).",
-    inputSchema: {
-      type: "object",
-      required: ["device_id"],
-      properties: {
-        device_id: { type: "string", description: "Device ID (UUID)" },
-      },
-    },
-  },
-  {
-    name: "tv_get_device_software_info",
-    description: "Gets installed software data for a monitored device.",
-    inputSchema: {
-      type: "object",
-      required: ["device_id"],
-      properties: {
-        device_id: { type: "string", description: "Device ID (UUID)" },
+        action: { type: "string", enum: ["list_alarms", "list_devices", "activate", "get_hardware", "get_system_info", "get_software"] },
+        device_id: { type: "string", description: "Device ID (UUID) — get_hardware, get_system_info, get_software" },
+        teamviewer_id: { type: "number", description: "TeamViewer numeric device ID — activate" },
+        monitoring_policy_id: { type: "string", description: "Monitoring policy ID — activate" },
+        patch_management_policy_id: { type: "string", description: "Patch management policy ID — activate" },
+        status: { type: "string", description: "Alarm status filter (list_alarms)" },
+        group_id: { type: "string", description: "Group ID filter (list_alarms)" },
+        start_date: { type: "string", description: "ISO 8601 start date (list_alarms)" },
+        end_date: { type: "string", description: "ISO 8601 end date (list_alarms)" },
+        continuation_token: { type: "string", description: "Pagination token (list_alarms)" },
       },
     },
   },
 ];
 
 export async function handleMonitoringTool(
-  name: string,
+  _name: string,
   args: Record<string, unknown>,
   client: TeamViewerClient
 ): Promise<unknown> {
-  switch (name) {
-    case "tv_list_monitoring_alarms":
+  const { action, device_id, teamviewer_id, monitoring_policy_id, patch_management_policy_id,
+    status, group_id, start_date, end_date, continuation_token } = args as {
+    action: string; device_id?: string; teamviewer_id?: number;
+    monitoring_policy_id?: string; patch_management_policy_id?: string;
+    status?: string; group_id?: string; start_date?: string; end_date?: string; continuation_token?: string;
+  };
+  switch (action) {
+    case "list_alarms":
       return client.get("/monitoring/alarms", {
-        "parameters.status": args.status as string | undefined,
-        "parameters.deviceId": args.device_id as string | undefined,
-        "parameters.groupId": args.group_id as string | undefined,
-        "parameters.startDate": args.start_date as string | undefined,
-        "parameters.endDate": args.end_date as string | undefined,
-        "parameters.continuationToken": args.continuation_token as string | undefined,
+        "parameters.status": status,
+        "parameters.deviceId": device_id,
+        "parameters.groupId": group_id,
+        "parameters.startDate": start_date,
+        "parameters.endDate": end_date,
+        "parameters.continuationToken": continuation_token,
       });
-
-    case "tv_list_monitoring_devices":
-      return client.get("/monitoring/devices");
-
-    case "tv_activate_monitoring":
-      return client.post("/monitoring/devices", {
-        teamviewer_id: args.teamviewer_id,
-        monitoring_policy_id: args.monitoring_policy_id,
-        patch_management_policy_id: args.patch_management_policy_id,
-      });
-
-    case "tv_get_device_hardware_info":
-      return client.get(`/monitoring/devices/${args.device_id}/hardware`);
-
-    case "tv_get_device_system_info":
-      return client.get(`/monitoring/devices/${args.device_id}/information`);
-
-    case "tv_get_device_software_info":
-      return client.get(`/monitoring/devices/${args.device_id}/software`);
-
-    default:
-      throw new Error(`Unknown monitoring tool: ${name}`);
+    case "list_devices":    return client.get("/monitoring/devices");
+    case "activate":        return client.post("/monitoring/devices", { teamviewer_id, monitoring_policy_id, patch_management_policy_id });
+    case "get_hardware":    return client.get(`/monitoring/devices/${device_id}/hardware`);
+    case "get_system_info": return client.get(`/monitoring/devices/${device_id}/information`);
+    case "get_software":    return client.get(`/monitoring/devices/${device_id}/software`);
+    default: throw new Error(`Unknown action for tv_monitoring: ${action}`);
   }
 }

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import express from "express";
 import cors from "cors";
-import { randomUUID } from "crypto";
 import { AsyncLocalStorage } from "async_hooks";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -233,65 +232,34 @@ if (tvClientId && tvClientSecret) {
 }
 
 // ---------------------------------------------------------------------------
-// MCP transport — one StreamableHTTPServerTransport per client session
+// MCP transport — stateless. Every POST is handled independently: no
+// initialize handshake or Mcp-Session-Id is required across calls, since
+// nothing here depends on state carried between requests (auth is already
+// per-request via the bearer token). This is required for MCP clients like
+// Copilot Studio that call /mcp as independent stateless HTTP requests
+// rather than maintaining a persistent session.
 // ---------------------------------------------------------------------------
-const transports = new Map<string, StreamableHTTPServerTransport>();
-
 async function handleMcpRequest(req: express.Request, res: express.Response): Promise<void> {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
 
   // The bearer token is the TV access token, added by requireBearerAuth middleware.
   // Fall back to the static env var token for local development without OAuth.
   const authToken = (req as express.Request & { auth?: { token: string } }).auth?.token;
   const activeToken = authToken ?? process.env.TEAMVIEWER_API_TOKEN ?? "";
 
-  // SSE stream reconnect
-  if (req.method === "GET") {
-    const transport = sessionId ? transports.get(sessionId) : undefined;
-    if (!transport) {
-      res.status(404).json({ error: "Session not found" });
-      return;
-    }
-    await tokenContext.run(activeToken, () => transport.handleRequest(req, res));
-    return;
-  }
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const server = createMcpServer();
+  await server.connect(transport);
 
-  // Session teardown
-  if (req.method === "DELETE") {
-    if (sessionId) {
-      const transport = transports.get(sessionId);
-      if (transport) {
-        await transport.close();
-        transports.delete(sessionId);
-      }
-    }
-    res.status(200).end();
-    return;
-  }
+  res.on("close", () => {
+    transport.close();
+    server.close();
+  });
 
-  // New or existing POST — resume session or create a new transport
-  let transport = sessionId ? transports.get(sessionId) : undefined;
-
-  if (!transport) {
-    const newTransport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (id) => {
-        transports.set(id, newTransport);
-      },
-    });
-
-    newTransport.onclose = () => {
-      if (newTransport.sessionId) transports.delete(newTransport.sessionId);
-    };
-
-    const server = createMcpServer();
-    await server.connect(newTransport);
-    transport = newTransport;
-  }
-
-  await tokenContext.run(activeToken, () =>
-    transport!.handleRequest(req, res, req.body)
-  );
+  await tokenContext.run(activeToken, () => transport.handleRequest(req, res, req.body));
 }
 
 // Bearer auth guard — applied when OAuth is configured.

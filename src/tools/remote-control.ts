@@ -1,16 +1,12 @@
 import { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 export const remoteControlTools: Tool[] = [
   {
     name: "tv_connect_device",
     description:
-      "Opens a TeamViewer remote control session to a device. " +
+      "Returns the TeamViewer remote control link for a device. " +
       "The teamviewer_id is the numeric TV ID visible on the managed device (e.g. from tv_list_managed_devices or tv_get_managed_device). " +
-      "Launches the TeamViewer desktop app on this machine.",
+      "The caller is responsible for opening the link on the user's own machine to launch the TeamViewer desktop app.",
     inputSchema: {
       type: "object",
       required: ["teamviewer_id"],
@@ -41,16 +37,8 @@ export async function handleRemoteControlTool(
   const tvId = teamviewer_id.replace(/\s/g, "");
   const url = `teamviewerapi://remotecontrol/?remotecontrolid=${tvId}&thirdpartyname=tv_claude`;
 
-  if (process.platform === "win32") {
-    await execFileAsync("cmd.exe", ["/c", "start", "", url]);
-  } else if (process.platform === "darwin") {
-    await execFileAsync("open", [url]);
-  } else {
-    await execFileAsync("xdg-open", [url]);
-  }
-
   return {
-    message: `Remote control session initiated for device ${tvId}.`,
+    message: `Remote control link generated for device ${tvId}. Open this link on your machine to start the session.`,
     url,
   };
 }

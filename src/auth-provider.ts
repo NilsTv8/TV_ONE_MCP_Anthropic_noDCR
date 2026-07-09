@@ -15,7 +15,7 @@ import {
   InvalidGrantError,
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 
-const TV_AUTHORIZE_URL = "https://login.teamviewer.com/oauth2/authorize";
+const TV_AUTHORIZE_URL = "https://account.teamviewer.com/oauth2/authorize";
 const TV_TOKEN_URL = "https://webapi.teamviewer.com/api/v1/OAuth2/token";
 const TV_REVOKE_URL = "https://webapi.teamviewer.com/api/v1/OAuth2/revoke";
 const TV_ACCOUNT_URL = "https://webapi.teamviewer.com/api/v1/account";

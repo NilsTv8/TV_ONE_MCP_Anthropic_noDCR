@@ -11,71 +11,71 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import {
-  InvalidTokenError,
   InvalidGrantError,
+  InvalidTargetError,
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { BoundedMap, TokenStore } from "./token-store.js";
 
 const TV_AUTHORIZE_URL = "https://account.teamviewer.com/oauth2/authorize";
 const TV_TOKEN_URL = "https://webapi.teamviewer.com/api/v1/OAuth2/token";
 const TV_REVOKE_URL = "https://webapi.teamviewer.com/api/v1/OAuth2/revoke";
 const TV_ACCOUNT_URL = "https://webapi.teamviewer.com/api/v1/account";
 
+// TV access tokens are refreshed this far ahead of their real expiry so a
+// brokered call never races a token that's about to die mid-request.
+const TV_REFRESH_BUFFER_MS = 2 * 60 * 1000;
+
 interface PendingAuth {
   clientRedirectUri: string;
   codeChallenge: string;
   scopes?: string[];
+  resource?: string;
 }
 
 interface PendingCode {
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt?: number;
+  subject: string;
   scope?: string;
   codeChallenge: string;
 }
 
-interface TokenCacheEntry {
-  authInfo: AuthInfo;
-  cachedAt: number;
-}
-
-const TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
-
-class BoundedMap<K, V> extends Map<K, V> {
-  constructor(private readonly maxSize: number) { super(); }
-  set(key: K, value: V): this {
-    if (!this.has(key) && this.size >= this.maxSize) {
-      const oldest = this.keys().next().value;
-      if (oldest !== undefined) this.delete(oldest);
-    }
-    return super.set(key, value);
-  }
+interface TvTokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
 }
 
 /**
- * OAuth provider that proxies the authorization flow to TeamViewer.
+ * OAuth provider that brokers the authorization flow to TeamViewer, for MCP
+ * clients that don't support Dynamic Client Registration (e.g. Copilot
+ * Studio). Any client_id is accepted (capture-redirect-uri pattern) — see
+ * recordRedirectUri()/knownRedirectUris below.
  *
  * TeamViewer uses a non-standard token exchange format (JSON body with numeric grant_type),
  * so we cannot use the SDK's ProxyOAuthServerProvider. Instead:
  *  - authorize() redirects to TeamViewer with OUR client credentials and a /callback redirect_uri
- *  - handleCallback() is called by the /callback Express route; it exchanges the TV code
- *    and issues our own MCP authorization code to the MCP client (Claude)
- *  - exchangeAuthorizationCode() redeems the MCP code and returns the TV tokens to Claude
- *  - verifyAccessToken() validates TV bearer tokens on every MCP request (with 5-min cache)
+ *  - handleCallback() is called by the /callback Express route; it exchanges the TV code,
+ *    stores the TV tokens server-side (encrypted, keyed by TV userid), and issues our own
+ *    MCP authorization code that references the subject — never the TV tokens.
+ *  - exchangeAuthorizationCode()/exchangeRefreshToken() mint the MCP's own opaque,
+ *    locally-verifiable tokens (aud = this MCP server). The client never sees a TV token.
+ *  - verifyAccessToken() validates MCP tokens locally (no network call to TeamViewer).
+ *  - resolveTeamViewerToken() is the only place a real TV token is produced, for
+ *    server-side use when actually calling the TeamViewer WebAPI on the client's behalf.
  */
 export class TeamViewerOAuthProvider implements OAuthServerProvider {
   readonly skipLocalPkceValidation = true;
 
   private readonly pendingAuths = new BoundedMap<string, PendingAuth>(1000);
   private readonly pendingCodes = new BoundedMap<string, PendingCode>(1000);
-  private readonly tokenCache = new BoundedMap<string, TokenCacheEntry>(10000);
-  private readonly tokenExpiry = new BoundedMap<string, number>(10000);
   private readonly knownRedirectUris = new BoundedMap<string, string>(1000);
 
   constructor(
     private readonly tvClientId: string,
     private readonly tvClientSecret: string,
     private readonly issuerUrl: URL,
+    private readonly resourceUri: string,
+    private readonly tokenStore: TokenStore,
     private readonly callbackUrl?: string
   ) {}
 
@@ -100,12 +100,17 @@ export class TeamViewerOAuthProvider implements OAuthServerProvider {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async authorize(_client: OAuthClientInformationFull, params: AuthorizationParams, res: any): Promise<void> {
+    if (params.resource && params.resource.href !== this.resourceUri) {
+      throw new InvalidTargetError(`resource must be ${this.resourceUri}`);
+    }
+
     const state = params.state ?? randomBytes(16).toString("hex");
 
     this.pendingAuths.set(state, {
       clientRedirectUri: params.redirectUri,
       codeChallenge: params.codeChallenge,
       scopes: params.scopes,
+      resource: params.resource?.href,
     });
 
     const tvUrl = new URL(TV_AUTHORIZE_URL);
@@ -129,7 +134,7 @@ export class TeamViewerOAuthProvider implements OAuthServerProvider {
     code: string,
     codeVerifier?: string,
     _redirectUri?: string,
-    _resource?: URL
+    resource?: URL
   ): Promise<OAuthTokens> {
     const pending = this.pendingCodes.get(code);
     if (!pending) throw new InvalidGrantError("Invalid or expired authorization code");
@@ -138,17 +143,20 @@ export class TeamViewerOAuthProvider implements OAuthServerProvider {
     const computed = createHash("sha256").update(codeVerifier).digest("base64url");
     if (computed !== pending.codeChallenge) throw new InvalidGrantError("Invalid code_verifier");
 
+    if (resource && resource.href !== this.resourceUri) {
+      throw new InvalidTargetError(`resource must be ${this.resourceUri}`);
+    }
+
     this.pendingCodes.delete(code);
 
-    const expiresIn = pending.expiresAt
-      ? Math.max(0, Math.floor((pending.expiresAt - Date.now()) / 1000))
-      : undefined;
+    const scopes = pending.scope ? pending.scope.split(" ") : [];
+    const issued = this.tokenStore.issueMcpTokens(pending.subject, scopes, this.resourceUri);
 
     return {
-      access_token: pending.accessToken,
+      access_token: issued.accessToken,
       token_type: "Bearer",
-      refresh_token: pending.refreshToken,
-      expires_in: expiresIn,
+      refresh_token: issued.refreshToken,
+      expires_in: issued.expiresIn,
       scope: pending.scope,
     };
   }
@@ -156,100 +164,102 @@ export class TeamViewerOAuthProvider implements OAuthServerProvider {
   async exchangeRefreshToken(
     _client: OAuthClientInformationFull,
     refreshToken: string,
-    scopes?: string[],
-    _resource?: URL
+    _scopes?: string[],
+    resource?: URL
   ): Promise<OAuthTokens> {
-    const body: Record<string, unknown> = {
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: this.tvClientId,
-      client_secret: this.tvClientSecret,
-    };
-    if (scopes?.length) body.scope = scopes.join(" ");
-
-    const resp = await fetch(TV_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!resp.ok) {
-      const errBody = await resp.text();
-      console.error("[teamviewer-mcp] Token refresh failed:", resp.status, errBody);
-      throw new InvalidGrantError("Token refresh failed. Please re-authenticate.");
+    if (resource && resource.href !== this.resourceUri) {
+      throw new InvalidTargetError(`resource must be ${this.resourceUri}`);
     }
 
-    const token = await resp.json() as {
-      access_token: string;
-      refresh_token?: string;
-      expires_in?: number;
-      scope?: string;
-    };
-
-    if (token.expires_in) {
-      this.tokenExpiry.set(token.access_token, Math.floor(Date.now() / 1000) + token.expires_in);
-    }
+    const issued = this.tokenStore.rotateMcpRefreshToken(refreshToken);
 
     return {
-      access_token: token.access_token,
+      access_token: issued.accessToken,
       token_type: "Bearer",
-      refresh_token: token.refresh_token,
-      expires_in: token.expires_in,
-      scope: token.scope,
+      refresh_token: issued.refreshToken,
+      expires_in: issued.expiresIn,
+      scope: issued.scopes.join(" "),
     };
   }
 
   async verifyAccessToken(accessToken: string): Promise<AuthInfo> {
-    const cached = this.tokenCache.get(accessToken);
-    if (cached && Date.now() - cached.cachedAt < TOKEN_CACHE_TTL_MS) {
-      return cached.authInfo;
-    }
+    const meta = this.tokenStore.verifyMcpAccessToken(accessToken);
 
-    const resp = await fetch(TV_ACCOUNT_URL, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (!resp.ok) {
-      this.tokenCache.delete(accessToken);
-      throw new InvalidTokenError("Invalid or expired TeamViewer access token");
-    }
-
-    const info = await resp.json() as { userid?: string; email?: string; name?: string };
-
-    // expiresAt is required by the bearer-auth middleware (epoch seconds).
-    // Use the value stored when the token was issued; fall back to 1 hour from now.
-    const expiresAt = this.tokenExpiry.get(accessToken) ?? Math.floor(Date.now() / 1000) + 3600;
-
-    const authInfo: AuthInfo = {
+    return {
       token: accessToken,
       clientId: this.tvClientId,
-      scopes: [],
-      expiresAt,
-      extra: {
-        userid: info.userid ?? "unknown",
-        email: info.email ?? "unknown",
-        name: info.name ?? "unknown",
-      },
+      scopes: meta.scopes,
+      expiresAt: Math.floor(meta.expiresAt / 1000),
+      extra: { subject: meta.subject },
     };
-
-    this.tokenCache.set(accessToken, { authInfo, cachedAt: Date.now() });
-    return authInfo;
   }
 
   async revokeToken(_client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
-    this.tokenCache.delete(request.token);
-    await fetch(TV_REVOKE_URL, {
+    const subject = this.tokenStore.subjectForToken(request.token);
+    if (!subject) return;
+
+    try {
+      const tvToken = await this.resolveTeamViewerToken(subject);
+      await fetch(TV_REVOKE_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tvToken}`, "Content-Type": "application/json" },
+      });
+    } catch {
+      // Best-effort — TV grant may already be gone or expired.
+    }
+
+    this.tokenStore.revokeSubject(subject);
+  }
+
+  /**
+   * Resolves the TeamViewer access token for a subject, refreshing it via
+   * TeamViewer if it's near expiry. This is the only path that ever produces
+   * a real TV token — used server-side to call the TeamViewer WebAPI on the
+   * client's behalf; the MCP client never sees it.
+   */
+  async resolveTeamViewerToken(subject: string): Promise<string> {
+    const grant = this.tokenStore.getTvGrant(subject);
+    if (!grant) throw new Error("No TeamViewer grant for this session. Please re-authenticate.");
+
+    if (!grant.expiresAt || grant.expiresAt - Date.now() > TV_REFRESH_BUFFER_MS) {
+      return grant.accessToken;
+    }
+
+    if (!grant.refreshToken) return grant.accessToken;
+
+    const resp = await fetch(TV_TOKEN_URL, {
       method: "POST",
-      headers: { Authorization: `Bearer ${request.token}`, "Content-Type": "application/json" },
-    }).catch(() => {
-      // Ignore revocation errors — token may already be expired or revoked
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        refresh_token: grant.refreshToken,
+        client_id: this.tvClientId,
+        client_secret: this.tvClientSecret,
+      }),
     });
+
+    if (!resp.ok) {
+      const errBody = await resp.text();
+      console.error("[teamviewer-mcp] TV token refresh failed:", resp.status, errBody);
+      throw new Error("TeamViewer session expired. Please re-authenticate.");
+    }
+
+    const token = await resp.json() as TvTokenResponse;
+    this.tokenStore.saveTvGrant(subject, {
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token ?? grant.refreshToken,
+      expiresAt: token.expires_in ? Date.now() + token.expires_in * 1000 : undefined,
+      scope: token.scope ?? grant.scope,
+    });
+
+    return token.access_token;
   }
 
   /**
    * Called by the GET /callback route when TeamViewer redirects the user back.
-   * Exchanges the TV authorization code for TV tokens, issues an MCP auth code,
-   * and returns the URL to redirect the user back to the MCP client (Claude).
+   * Exchanges the TV authorization code for TV tokens, stores them server-side
+   * keyed by the TV subject, and issues an MCP auth code that references that
+   * subject — never the TV tokens themselves.
    */
   async handleCallback(tvCode: string, state: string): Promise<string> {
     const pending = this.pendingAuths.get(state);
@@ -276,23 +286,28 @@ export class TeamViewerOAuthProvider implements OAuthServerProvider {
       throw new Error("Authorization failed. Please try again.");
     }
 
-    const token = await resp.json() as {
-      access_token: string;
-      refresh_token?: string;
-      expires_in?: number;
-      scope?: string;
-    };
+    const token = await resp.json() as TvTokenResponse;
 
-    if (token.expires_in) {
-      this.tokenExpiry.set(token.access_token, Math.floor(Date.now() / 1000) + token.expires_in);
+    const accountResp = await fetch(TV_ACCOUNT_URL, {
+      headers: { Authorization: `Bearer ${token.access_token}` },
+    });
+    if (!accountResp.ok) {
+      throw new Error("Failed to resolve TeamViewer account for this session.");
     }
+    const account = await accountResp.json() as { userid?: string };
+    const subject = account.userid;
+    if (!subject) throw new Error("TeamViewer account response missing userid.");
 
-    // Issue an MCP authorization code that maps to the TV tokens
-    const mcpCode = randomBytes(32).toString("hex");
-    this.pendingCodes.set(mcpCode, {
+    this.tokenStore.saveTvGrant(subject, {
       accessToken: token.access_token,
       refreshToken: token.refresh_token,
       expiresAt: token.expires_in ? Date.now() + token.expires_in * 1000 : undefined,
+      scope: token.scope,
+    });
+
+    const mcpCode = randomBytes(32).toString("hex");
+    this.pendingCodes.set(mcpCode, {
+      subject,
       scope: token.scope,
       codeChallenge: pending.codeChallenge,
     });

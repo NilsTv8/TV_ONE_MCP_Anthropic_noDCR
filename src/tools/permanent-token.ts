@@ -8,7 +8,6 @@ export const permanentTokenTools: Tool[] = [
 
 action values:
   create  — create a permanent token (required: name 5–20 chars; optional: scope)
-            The returned token can be stored as TEAMVIEWER_API_TOKEN for use without OAuth.
   delete  — delete the permanent token for the current session (no params)`,
     inputSchema: {
       type: "object",

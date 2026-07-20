@@ -35,7 +35,6 @@ Tools listing requires no auth; tool execution requires a valid TV bearer token.
 | `TEAMVIEWER_MCP_URL` | Yes | Public base URL of this server (no trailing slash) |
 | `TEAMVIEWER_CALLBACK_URL` | No | OAuth callback URL (defaults to `{MCP_URL}/callback`) |
 | `PORT` | No | HTTP port (default: 3000) |
-| `TEAMVIEWER_API_TOKEN` | No | Static TV token — bypasses OAuth entirely |
 
 ## Running Locally
 

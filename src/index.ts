@@ -37,15 +37,10 @@ import { remoteControlTools, handleRemoteControlTool } from "./tools/remote-cont
 const tokenContext = new AsyncLocalStorage<string>();
 
 export function getClient(): TeamViewerClient {
-  const envToken = process.env.TEAMVIEWER_API_TOKEN;
-  if (envToken) return new TeamViewerClient(envToken);
-
   const token = tokenContext.getStore();
   if (token) return new TeamViewerClient(token);
 
-  throw new Error(
-    "Not authenticated. Connect via OAuth or set the TEAMVIEWER_API_TOKEN environment variable."
-  );
+  throw new Error("Not authenticated. Connect via OAuth.");
 }
 
 // ---------------------------------------------------------------------------
@@ -246,9 +241,8 @@ async function handleMcpRequest(req: express.Request, res: express.Response): Pr
   }
 
   // The bearer token is the TV access token, added by requireBearerAuth middleware.
-  // Fall back to the static env var token for local development without OAuth.
   const authToken = (req as express.Request & { auth?: { token: string } }).auth?.token;
-  const activeToken = authToken ?? process.env.TEAMVIEWER_API_TOKEN ?? "";
+  const activeToken = authToken ?? "";
 
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   const server = createMcpServer();
@@ -326,11 +320,10 @@ if (provider) {
   };
 
   mcpMiddleware.push(customBearerAuth);
-} else if (!process.env.TEAMVIEWER_API_TOKEN) {
+} else {
   console.warn(
     "[teamviewer-mcp] WARNING: No authentication configured. " +
-      "Set TEAMVIEWER_CLIENT_ID + TEAMVIEWER_CLIENT_SECRET (OAuth) " +
-      "or TEAMVIEWER_API_TOKEN (static token)."
+      "Set TEAMVIEWER_CLIENT_ID + TEAMVIEWER_CLIENT_SECRET (OAuth)."
   );
 }
 

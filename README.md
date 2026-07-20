@@ -69,9 +69,6 @@ The server reads credentials from environment variables. Set these in your MCP c
 | `TEAMVIEWER_CLIENT_ID` | Yes | OAuth2 client ID from the Developer Portal |
 | `TEAMVIEWER_CLIENT_SECRET` | Yes | OAuth2 client secret from the Developer Portal |
 | `TEAMVIEWER_REDIRECT_URI` | Yes | Redirect URI registered in the Developer Portal |
-| `TEAMVIEWER_API_TOKEN` | Optional | Static/permanent API token (bypasses OAuth entirely) |
-
-> **Note:** If `TEAMVIEWER_API_TOKEN` is set, the server uses it directly and skips the OAuth flow. This is the simplest option if you already have a permanent token.
 
 ---
 
